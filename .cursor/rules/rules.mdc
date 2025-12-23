@@ -1,188 +1,217 @@
 ---
 alwaysApply: true
 ---
-# 아키텍처 규칙 (Architecture Rules)
 
-이 문서는 **이 레포지토리에서 반드시 지켜야 하는 아키텍처 규칙**을 정의한다.  
-모든 코드 생성, 수정, 리팩터링은 이 규칙을 전제로 한다.
+# Architecture & Engineering Rules (Monorepo + MSA-ready)
+# Domain term: "order" (cargo 금지)
+# Updated: 2025-12-23
 
-이 문서는 설명서가 아니다.  
-**규칙이며, 제약이며, 어길 수 없다.**
-
----
-
-## 1. 적용 범위 (Scope)
-
-- 이 레포지토리는 **모노레포 기반 MSA(MSA-ready)** 구조를 따른다.
-- 초기에는 단일 실행 애플리케이션으로 시작할 수 있으나,
-  **도메인·의존성·구조는 항상 서비스 분리를 전제로 유지**한다.
-- 모든 백엔드 코드는 이 문서의 규칙을 따른다.
+이 문서는 **이 레포지토리의 헌법**이다.
+AI(Cursor 포함)와 사람이 작성하는 모든 코드는 이 규칙을 반드시 따른다.
 
 ---
 
-## 2. 기본 아키텍처 원칙 (Mandatory Principles)
+## 0. 최우선 원칙 (Non-Negotiables)
 
-이 프로젝트는 다음 아키텍처를 **필수 전제**로 한다.
+1) **도메인 용어는 `order`를 사용한다.**  
+   - `cargo` 용어/패키지/클래스/테이블 명칭은 신규로 만들지 않는다.
 
-- 헥사고날 아키텍처 (Hexagonal Architecture, Ports & Adapters)
-- 클린 아키텍처 (Clean Architecture, Dependency Rule)
-- CQRS (Command / Query 책임 분리 – Lite)
+2) **Hexagonal + Clean + CQRS(Lite)를 기본 아키텍처로 고정한다.**
+   - Domain은 기술 독립(JDK-only)
+   - Application은 UseCase(명령/조회) 중심
+   - Adapter는 기술 구현만
 
-이 원칙은 선택 사항이 아니다.
+3) **서비스는 “데이터 소유권(Owner)”을 가진다.**
+   - 다른 서비스 데이터에 직접 조인/직접 업데이트/직접 FK 의존 금지
+   - 서비스 경계 넘어가는 참조는 **soft-ref(id만)** 로 처리
 
----
-
-## 3. 의존성 규칙 (Dependency Rules)
-
-### 3.1 의존성 방향
-
-의존성은 **아래 방향으로만 허용된다**.
-
-domain
-↑
-application
-↑
-adapters
-↑
-apps/api
-
-markdown
-코드 복사
-
-역방향 의존성은 **절대 허용되지 않는다**.
+4) **Cross-service FK 금지(신규 생성 금지).**
+   - 기존 FK는 단계적으로 제거한다.
 
 ---
 
-### 3.2 도메인 계층 (Domain Layer)
+## 1. 레포 구조 규칙 (Monorepo)
 
-도메인 계층은 **순수 비즈니스 규칙만** 포함한다.
+권장 레포 구조는 아래와 같다.
 
-도메인 계층은 다음에 **절대 의존하지 않는다**:
+- `services/*` : 독립 배포 가능한 서비스(기본 단위)
+- `shared/*` : 공통 모듈(계약/에러/관측성 등)
+- `platform/*` : CI/CD, 배포, 로컬 개발 지원
+- `docs/*` : 규칙/아키텍처/컨벤션 문서
 
-- Spring Framework 전반
-- JPA / Hibernate 및 모든 ORM 어노테이션
-- Web / HTTP 개념
-- Kafka, Redis, R2DBC 등 인프라 기술
+예:
+- `services/order-service`
+- `services/settlement-service`
+- `services/master-service`
+- `services/iam-service`
+- `services/messaging-service`
+- `shared/contracts`, `shared/errors`, `shared/observability`, `shared/core`
+- `platform/ci`, `platform/deploy`, `platform/dev`
+
+---
+
+## 2. 서비스 내부 아키텍처 규칙 (Hexagonal + Clean)
+
+각 서비스는 반드시 아래 계층을 가진다.
+
+- `domain/*` : 순수 도메인 (JDK-only)
+- `application/*` : UseCase (Command/Query 분리)
+- `adapter/*` : inbound/outbound (기술 구현)
+- `config/*` : Spring 설정/조립(wiring)
+
+### 2.1 Domain 규칙 (가장 엄격)
+Domain에는 아래 요소를 **절대 포함하지 않는다**.
+
+- Spring 관련(import 포함)
+- JPA/Hibernate 어노테이션
+- R2DBC/Reactive 타입(Flux/Mono)
+- Kafka/Redis/HTTP/DB 접근
 - Lombok
-- 그 외 모든 프레임워크 및 외부 라이브러리
+- 프레임워크 유틸 전반
 
-✅ 도메인 계층은 **순수 Java(POJO)** 로만 구성한다.  
-❌ 도메인 계층에 기술적 어노테이션을 추가하지 않는다.
+Domain에 들어갈 수 있는 것:
+- Entity/Aggregate, Value Object, Domain Service, Domain Event(순수 객체)
 
----
+### 2.2 Application 규칙
+Application은 “업무 흐름”만 담당한다.
 
-### 3.3 애플리케이션 계층 (Application Layer)
+- Command / Query 책임을 섞지 않는다.
+- Port(인터페이스)를 먼저 정의하고 Adapter가 구현한다.
+- 트랜잭션 경계는 Application에서 잡는다(Write 기준).
 
-애플리케이션 계층은 **유스케이스 실행 책임**을 가진다.
+### 2.3 Adapter 규칙
+Adapter는 기술 구현만 한다.
 
-애플리케이션 계층의 책임:
+- inbound: REST(MVC), WebFlux, gRPC 등
+- outbound: JPA(write), R2DBC(read), Kafka, Redis, External API
 
-- 유스케이스(Use Case) 정의 및 실행
-- 커맨드(Command)와 쿼리(Query) 흐름 분리
-- 입력/출력 포트(Port 인터페이스) 정의
-- 트랜잭션 경계 관리
-
-애플리케이션 계층은:
-- 도메인 계층에 의존할 수 있다
-- 어댑터 구현체에는 의존하지 않는다
-
----
-
-### 3.4 어댑터 계층 (Adapter / Infrastructure Layer)
-
-어댑터 계층은 **기술 구현만 담당**한다.
-
-- 인바운드 어댑터 (Inbound)
-  - REST Controller (Spring MVC)
-  - WebFlux Handler
-  - 메시지 컨슈머, gRPC 등
-
-- 아웃바운드 어댑터 (Outbound)
-  - JPA (쓰기 / Write)
-  - R2DBC (조회 / Read)
-  - Kafka
-  - Redis
-  - 외부 API 연동
-
-어댑터는:
-- 포트(Port)를 구현한다
-- 비즈니스 규칙을 포함하지 않는다
+Adapter에는 **비즈니스 규칙을 작성하지 않는다.**
+(비즈니스 규칙은 Domain/Application로 이동)
 
 ---
 
-## 4. CQRS 규칙 (Command / Query Separation)
+## 3. CQRS(Lite) 규칙
 
-### 4.1 Command (Write)
+### 3.1 Command (Write)
+- 상태 변경(Create/Update/Cancel/Confirm 등)
+- 트랜잭션 무결성 우선
+- 기본은 **JPA 기반(Blocking)**
 
-- 상태를 변경하는 모든 작업
-- Create / Update / Delete
-- JPA 사용
-- 트랜잭션 무결성 필수
-- 비즈니스 규칙 포함 가능
-
-### 4.2 Query (Read)
-
-- 조회 전용 작업
+### 3.2 Query (Read)
+- 조회 전용
 - 상태 변경 금지
-- 비즈니스 규칙 금지
-- 초기에는 JPA 사용 가능
-- 필요 시 R2DBC 사용 가능
-
-❌ Command와 Query 책임을 하나의 클래스에 섞지 않는다.
+- 기본은 JPA 가능(초기), 필요 시 **R2DBC로 확장**
+- Query는 “정합성”보다 “속도/유연성”을 우선한다(단, 요구사항 범위 내)
 
 ---
 
-## 5. 모듈 책임 (Module Responsibilities)
+## 4. WebFlux + MVC 하이브리드 규칙 (Blocking/Non-Blocking 혼용 가드)
 
-- `domain`
-  - 엔티티 / 애그리게이트
-  - 값 객체(Value Object)
-  - 도메인 서비스
-  - 도메인 이벤트
-
-- `application`
-  - 유스케이스
-  - 커맨드 / 쿼리 핸들러
-  - 포트 인터페이스 (입력 / 출력)
-
-- `adapters`
-  - 인바운드 어댑터
-  - 아웃바운드 어댑터
-
-- `apps/api`
-  - 애플리케이션 부트스트랩
-  - 의존성 연결(Wiring)
-  - 설정(Configuration)
-  - ❌ 비즈니스 로직 금지
+- JPA(Blocking)를 WebFlux Netty 이벤트 루프에서 직접 실행 금지.
+- 하이브리드 운영 시 권장:
+  - **Command API**: MVC Controller (Blocking/JPA)
+  - **Query API**: WebFlux Handler (Reactive/R2DBC 또는 캐시)
+- 혼용이 불가피하면:
+  - Blocking 작업은 별도 스케줄러/스레드로 격리(원칙적으로 지양)
 
 ---
 
-## 6. 금지 패턴 (Anti-Patterns)
+## 5. 데이터 소유권 & DB 분리 규칙 (Phase 1 → Phase 2)
 
-다음 패턴은 **명시적으로 금지**한다.
+### 5.1 Phase 1 (단일 DB 유지 + schema 분리)
+DB는 하나(Postgres/Supabase)일 수 있으나,
+스키마로 소유권을 강제한다.
 
-- Controller → Repository 직접 호출
-- 도메인 객체에 Spring / JPA / Lombok 어노테이션 사용
-- 어댑터 또는 컨트롤러에 비즈니스 로직 작성
-- Command와 Query 책임 혼합
-- 명확한 근거 없이 새로운 계층 추가
-- 구조를 단순화한다는 이유로 규칙을 우회하는 행위
+- `order.*`
+- `settlement.*`
+- `master.*`
+- `iam.*`
+- `messaging.*`
+- `geo.*` (infra)
+
+**각 서비스는 자기 schema만 접근한다.**
+(다른 schema 직접 조회/조인 금지)
+
+### 5.2 Phase 2 (서비스별 물리 DB 분리)
+서비스 규모/조직/트래픽이 커지면 DB를 물리 분리한다.
+Phase 1 규칙을 지키면 Phase 2 전환 비용이 낮아진다.
 
 ---
 
-## 7. 규칙 우선순위 (Rule Priority)
+## 6. 서비스 간 데이터 결합 규칙 (조인 대신)
 
-- 구현 편의성보다 **아키텍처 규칙이 우선**한다.
-- 코드가 더 짧아지더라도 규칙을 깨면 안 된다.
-- 규칙 변경은 문서 변경 없이는 허용되지 않는다.
+서비스 간 데이터 결합은 아래 중 하나로만 한다.
+
+1) **API Composition (권장 기본)**
+   - 예: Settlement 화면에서 order 정보 10컬럼 필요
+   - Settlement Query 결과의 `orderId[]`로
+     Order의 “요약 배치 API”를 호출해 merge
+
+2) **Event 기반 Read Model (선택/확장)**
+   - 조회 성능 요구가 매우 커질 때만 도입
+   - 이벤트를 받아 조회 전용 테이블/DB를 구축
+
+### 6.1 Order Summary Batch 규칙(기본 패턴)
+- `POST /api/orders/summaries`
+- input: `orderIds[]`
+- output: `orderId -> summary(<= 10 fields)`
+- 캐시(Redis)는 선택(필요 시 도입)
 
 ---
 
-## 8. 최종 원칙
+## 7. shared 모듈 규칙 (공통 코드의 한계)
 
-> **이 아키텍처 규칙은  
-> 현재의 개발 편의보다  
-> 미래의 유지보수를 보호하기 위해 존재한다.**
+`shared/*`는 “공통 재사용”을 위한 영역이지만, 아래를 금지한다.
 
-이 문서의 규칙은  
-모든 코드와 설계 결정에 **우선 적용된다**.
+- 특정 서비스 도메인 규칙의 이동(=공통화 금지)
+- 서비스 고유 Entity/UseCase의 공유
+- DB/Repository 구현체의 공유
+
+허용 범위:
+- `shared/contracts`: 이벤트/DTO 스키마(버전 관리)
+- `shared/errors`: 에러 코드/표준 응답
+- `shared/observability`: logging/tracing/metrics
+- `shared/core`: 원시 타입/공통 유틸(도메인 규칙 X)
+
+---
+
+## 8. 에러/응답/관측성 기본 규칙
+
+- 모든 API는 표준 에러 응답 형태를 따른다.
+- traceId(또는 correlationId)를 전 구간 전파한다.
+- 로그는 “원인 추적 가능”해야 한다(요청/핵심 식별자 포함).
+- 민감정보(주민번호/계좌/토큰/비밀번호/개인정보)는 로그 금지.
+
+---
+
+## 9. 테스트 규칙 (최소 기준)
+
+- Domain: 순수 단위 테스트(프레임워크 없이)
+- Application: Port mocking 기반 유스케이스 테스트
+- Adapter: 통합 테스트는 필요 범위에서(우선순위 낮음)
+- 서비스 간 통합은 API 계약/컨트랙트 테스트를 우선
+
+---
+
+## 10. 작업 프로토콜 (AI 포함)
+
+AI가 작업을 시작하기 전 반드시 선언한다.
+
+- 대상 서비스: (예: order-service)
+- 계층: domain / application / adapter / config
+- 작업 성격: command(write) / query(read)
+- 데이터 소유권: 이 변경이 어느 서비스 schema에 속하는가?
+
+AI는 아래를 절대 하지 않는다.
+
+- 규칙을 우회하기 위한 편의성 리팩터링
+- cross-service FK 추가
+- 다른 서비스 DB/schema 직접 조회
+- Domain에 기술 의존 코드 삽입
+
+규칙 변경이 필요하면:
+- 변경 이유/대안/영향범위를 문서로 제안하고, 사용자 승인 후 반영한다.
+```
+
+---
+
