@@ -1,0 +1,188 @@
+---
+alwaysApply: true
+---
+# 아키텍처 규칙 (Architecture Rules)
+
+이 문서는 **이 레포지토리에서 반드시 지켜야 하는 아키텍처 규칙**을 정의한다.  
+모든 코드 생성, 수정, 리팩터링은 이 규칙을 전제로 한다.
+
+이 문서는 설명서가 아니다.  
+**규칙이며, 제약이며, 어길 수 없다.**
+
+---
+
+## 1. 적용 범위 (Scope)
+
+- 이 레포지토리는 **모노레포 기반 MSA(MSA-ready)** 구조를 따른다.
+- 초기에는 단일 실행 애플리케이션으로 시작할 수 있으나,
+  **도메인·의존성·구조는 항상 서비스 분리를 전제로 유지**한다.
+- 모든 백엔드 코드는 이 문서의 규칙을 따른다.
+
+---
+
+## 2. 기본 아키텍처 원칙 (Mandatory Principles)
+
+이 프로젝트는 다음 아키텍처를 **필수 전제**로 한다.
+
+- 헥사고날 아키텍처 (Hexagonal Architecture, Ports & Adapters)
+- 클린 아키텍처 (Clean Architecture, Dependency Rule)
+- CQRS (Command / Query 책임 분리 – Lite)
+
+이 원칙은 선택 사항이 아니다.
+
+---
+
+## 3. 의존성 규칙 (Dependency Rules)
+
+### 3.1 의존성 방향
+
+의존성은 **아래 방향으로만 허용된다**.
+
+domain
+↑
+application
+↑
+adapters
+↑
+apps/api
+
+markdown
+코드 복사
+
+역방향 의존성은 **절대 허용되지 않는다**.
+
+---
+
+### 3.2 도메인 계층 (Domain Layer)
+
+도메인 계층은 **순수 비즈니스 규칙만** 포함한다.
+
+도메인 계층은 다음에 **절대 의존하지 않는다**:
+
+- Spring Framework 전반
+- JPA / Hibernate 및 모든 ORM 어노테이션
+- Web / HTTP 개념
+- Kafka, Redis, R2DBC 등 인프라 기술
+- Lombok
+- 그 외 모든 프레임워크 및 외부 라이브러리
+
+✅ 도메인 계층은 **순수 Java(POJO)** 로만 구성한다.  
+❌ 도메인 계층에 기술적 어노테이션을 추가하지 않는다.
+
+---
+
+### 3.3 애플리케이션 계층 (Application Layer)
+
+애플리케이션 계층은 **유스케이스 실행 책임**을 가진다.
+
+애플리케이션 계층의 책임:
+
+- 유스케이스(Use Case) 정의 및 실행
+- 커맨드(Command)와 쿼리(Query) 흐름 분리
+- 입력/출력 포트(Port 인터페이스) 정의
+- 트랜잭션 경계 관리
+
+애플리케이션 계층은:
+- 도메인 계층에 의존할 수 있다
+- 어댑터 구현체에는 의존하지 않는다
+
+---
+
+### 3.4 어댑터 계층 (Adapter / Infrastructure Layer)
+
+어댑터 계층은 **기술 구현만 담당**한다.
+
+- 인바운드 어댑터 (Inbound)
+  - REST Controller (Spring MVC)
+  - WebFlux Handler
+  - 메시지 컨슈머, gRPC 등
+
+- 아웃바운드 어댑터 (Outbound)
+  - JPA (쓰기 / Write)
+  - R2DBC (조회 / Read)
+  - Kafka
+  - Redis
+  - 외부 API 연동
+
+어댑터는:
+- 포트(Port)를 구현한다
+- 비즈니스 규칙을 포함하지 않는다
+
+---
+
+## 4. CQRS 규칙 (Command / Query Separation)
+
+### 4.1 Command (Write)
+
+- 상태를 변경하는 모든 작업
+- Create / Update / Delete
+- JPA 사용
+- 트랜잭션 무결성 필수
+- 비즈니스 규칙 포함 가능
+
+### 4.2 Query (Read)
+
+- 조회 전용 작업
+- 상태 변경 금지
+- 비즈니스 규칙 금지
+- 초기에는 JPA 사용 가능
+- 필요 시 R2DBC 사용 가능
+
+❌ Command와 Query 책임을 하나의 클래스에 섞지 않는다.
+
+---
+
+## 5. 모듈 책임 (Module Responsibilities)
+
+- `domain`
+  - 엔티티 / 애그리게이트
+  - 값 객체(Value Object)
+  - 도메인 서비스
+  - 도메인 이벤트
+
+- `application`
+  - 유스케이스
+  - 커맨드 / 쿼리 핸들러
+  - 포트 인터페이스 (입력 / 출력)
+
+- `adapters`
+  - 인바운드 어댑터
+  - 아웃바운드 어댑터
+
+- `apps/api`
+  - 애플리케이션 부트스트랩
+  - 의존성 연결(Wiring)
+  - 설정(Configuration)
+  - ❌ 비즈니스 로직 금지
+
+---
+
+## 6. 금지 패턴 (Anti-Patterns)
+
+다음 패턴은 **명시적으로 금지**한다.
+
+- Controller → Repository 직접 호출
+- 도메인 객체에 Spring / JPA / Lombok 어노테이션 사용
+- 어댑터 또는 컨트롤러에 비즈니스 로직 작성
+- Command와 Query 책임 혼합
+- 명확한 근거 없이 새로운 계층 추가
+- 구조를 단순화한다는 이유로 규칙을 우회하는 행위
+
+---
+
+## 7. 규칙 우선순위 (Rule Priority)
+
+- 구현 편의성보다 **아키텍처 규칙이 우선**한다.
+- 코드가 더 짧아지더라도 규칙을 깨면 안 된다.
+- 규칙 변경은 문서 변경 없이는 허용되지 않는다.
+
+---
+
+## 8. 최종 원칙
+
+> **이 아키텍처 규칙은  
+> 현재의 개발 편의보다  
+> 미래의 유지보수를 보호하기 위해 존재한다.**
+
+이 문서의 규칙은  
+모든 코드와 설계 결정에 **우선 적용된다**.
