@@ -1,0 +1,247 @@
+---
+alwaysApply: true
+---
+
+# 개발 규칙 및 컨벤션 (Development Conventions)
+
+이 문서는 이 레포지토리에서 사용하는  
+**네이밍, 패키지 구조, API 설계, 코드 스타일에 대한 합의된 규칙**을 정의한다.
+
+아키텍처 규칙은 `.cursor/rules.md`를 따른다.  
+이 문서는 **표현 방식과 일관성**을 위한 기준이다.
+
+---
+
+## 1. 공통 원칙 (General Principles)
+
+- 일관성이 가독성보다 우선한다
+- 축약어 사용을 최소화한다
+- 도메인 용어는 반드시 통일한다
+- 한 클래스는 하나의 책임만 가진다
+
+> 본 프로젝트의 핵심 도메인 명칭은 **Order** 이며,  
+> `Cargo`라는 표현은 사용하지 않는다.
+
+---
+
+## 2. 패키지 구조 규칙 (Package Structure)
+
+### 2.1 기본 패키지 구조
+
+```
+
+com.company.project
+├─ domain
+├─ application
+├─ adapters
+└─ config
+
+```
+
+### 2.2 도메인 기준 패키지 분리
+
+```
+
+domain/order
+application/order
+adapters/inbound/order
+adapters/outbound/order
+
+````
+
+❌ 기술 기준 패키지 분리 금지  
+(ex. `controller`, `service`, `repository` 단독 패키지)
+
+---
+
+## 3. 클래스 네이밍 규칙 (Class Naming)
+
+### 3.1 Domain 계층
+
+- Entity / Aggregate: **명사**
+  - `Order`
+  - `OrderSettlement`
+- Value Object: **명사**
+  - `OrderId`
+  - `Money`
+- Domain Service: `~DomainService`
+  - `OrderRuleDomainService`
+
+❌ `Service`, `Manager` 단독 사용 금지  
+❌ 기술 의미가 드러나는 이름 금지
+
+---
+
+### 3.2 Application 계층 (UseCase)
+
+#### Command (Write)
+
+- Command:
+  - `CreateOrderCommand`
+  - `UpdateOrderCommand`
+  - `CancelOrderCommand`
+
+- Handler:
+  - `CreateOrderCommandHandler`
+  - `UpdateOrderCommandHandler`
+  - `CancelOrderCommandHandler`
+
+#### Query (Read)
+
+- Query:
+  - `GetOrderQuery`
+  - `ListOrdersQuery`
+
+- Handler:
+  - `GetOrderQueryHandler`
+  - `ListOrdersQueryHandler`
+
+---
+
+### 3.3 Port 네이밍 규칙
+
+- Write Port:
+  - `OrderWritePort`
+- Read Port:
+  - `OrderReadPort`
+
+Port는 반드시 **인터페이스**로 정의한다.
+
+---
+
+### 3.4 Adapter 네이밍 규칙
+
+#### Inbound Adapter
+
+- Command API:
+  - `OrderCommandController`
+- Query API:
+  - `OrderQueryController`
+
+#### Outbound Adapter
+
+- JPA Adapter:
+  - `OrderJpaAdapter`
+- R2DBC Adapter:
+  - `OrderR2dbcAdapter`
+- Event Adapter:
+  - `OrderEventProducer`
+
+❌ `Repository` 네이밍은 Adapter 내부 구현에서만 허용
+
+---
+
+## 4. API 설계 규칙 (REST API Conventions)
+
+### 4.1 URL 규칙
+
+- 명사 사용
+- 소문자 + kebab-case
+- 복수형 사용
+- 동사는 URL에 포함하지 않는다
+
+```http
+POST   /api/orders
+PUT    /api/orders/{orderId}
+DELETE /api/orders/{orderId}
+
+GET    /api/orders/{orderId}
+GET    /api/orders
+````
+
+---
+
+### 4.2 Command / Query 분리
+
+* 상태 변경 → Command API
+* 조회 → Query API
+
+❌ 하나의 API에서 조회 + 상태 변경 혼합 금지
+
+---
+
+## 5. DTO 규칙 (Request / Response)
+
+### 5.1 Request DTO
+
+* `CreateOrderRequest`
+* `UpdateOrderRequest`
+
+### 5.2 Response DTO
+
+* `OrderResponse`
+* `OrderSummaryResponse`
+
+❌ Domain Entity를 API Response로 직접 노출 금지
+
+---
+
+## 6. 예외 처리 규칙 (Exception Handling)
+
+### 6.1 Domain 예외
+
+* `OrderStatusInvalidException`
+* `OrderAmountInvalidException`
+
+### 6.2 Application 예외
+
+* `OrderNotFoundException`
+* `OrderPermissionDeniedException`
+
+모든 예외는 다음 정보를 포함한다:
+
+* 에러 코드
+* 사용자 메시지
+* HTTP Status
+
+---
+
+## 7. 테스트 네이밍 규칙 (Test Naming)
+
+* Domain 테스트:
+
+  * `OrderTest`
+  * `OrderRuleDomainServiceTest`
+
+* UseCase 테스트:
+
+  * `CreateOrderCommandHandlerTest`
+
+* 통합 테스트:
+
+  * `OrderApiIntegrationTest`
+
+---
+
+## 8. 커밋 메시지 규칙 (Commit Convention)
+
+```text
+feat: 주문 생성 기능 추가
+fix: 주문 상태 변경 오류 수정
+refactor: Order 도메인 구조 개선
+docs: Order 아키텍처 문서 보완
+```
+
+---
+
+## 9. 문서 네이밍 및 역할
+
+* 아키텍처 규칙 → `.cursor/rules.md`
+* 아키텍처 설명 → `architecture.md`
+* AI 행동 규약 → `agent.md`
+* 네이밍/표현 규칙 → `conventions.md`
+
+---
+
+## 10. 문서 우선순위
+
+문서 간 우선순위는 다음과 같다.
+
+1. `.cursor/rules.md`
+2. `agent.md`
+3. `conventions.md`
+4. `architecture.md`
+
+충돌 시 상위 문서가 항상 우선한다.
+
+
