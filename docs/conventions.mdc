@@ -12,10 +12,21 @@ alwaysApply: true
 
 ## 0. 문서 우선순위
 
-1) `.cursor/rules.mdc` (헌법)
-2) `docs/agent.md` 또는 `docs/agent.mdc` (AI 작업 프로토콜)
+1) `.cursor/rules/rules.mdc` (헌법)
+2) `docs/agent.mdc` (AI 작업 프로토콜)
 3) `docs/conventions.mdc` (표준/표현)
-4) `docs/architecture.md` (배경/방향)
+4) `docs/architecture.mdc` (배경/방향)
+5) `docs/tech-stack.mdc` (기술 스택/도입 순서)
+
+---
+
+## 0.1 필수/권장/선택 정의
+
+| 구분 | 의미 | 위반 시 |
+|------|------|---------|
+| **필수** | 반드시 따라야 함 | PR 거부 |
+| **권장** | 따르는 것이 좋음 | 리뷰어 판단 |
+| **선택** | 팀 합의로 결정 | 일관성만 유지 |
 
 ---
 
@@ -124,6 +135,16 @@ alwaysApply: true
 - 동사 금지
 - 리소스 식별자는 `{orderId}` 등으로 표준화
 
+#### 5.1.1 API 버전 관리
+- **기본값**: URL 버전 (`/api/v1/orders`)
+- 버전 업그레이드 트리거:
+  - Breaking change (필드 삭제, 타입 변경)
+  - 필드 추가는 버전 유지 (backward compatible)
+- 구버전 지원 기간: 최소 6개월 (또는 팀 정책)
+- 예시:
+  - `/api/v1/orders` (현재)
+  - `/api/v2/orders` (breaking change 발생 시)
+
 예)
 - `POST /api/orders`
 - `PUT /api/orders/{orderId}`
@@ -203,9 +224,74 @@ alwaysApply: true
 
 ---
 
-## 8. DB 컨벤션 (Phase 1: 단일 DB + schema 분리)
+## 8. 예외 처리 컨벤션
 
-### 8.1 schema 네이밍(권장)
+### 8.1 예외 계층 구조
+```
+DomainException (Domain 계층 - 추상)
+├── OrderNotFoundException
+├── OrderAlreadyConfirmedException
+├── InvalidOrderStatusTransitionException
+└── ...
+
+ApplicationException (Application 계층 - 추상)
+├── UnauthorizedAccessException
+├── ValidationException
+└── ...
+
+InfrastructureException (Adapter 계층 - 추상)
+├── DatabaseConnectionException
+├── ExternalApiException
+└── ...
+```
+
+### 8.2 예외 발생 위치
+
+| 계층 | 예외 종류 | 예시 |
+|------|-----------|------|
+| Domain | 도메인 규칙 위반 | `InvalidOrderStatusTransitionException` |
+| Application | 권한/검증/존재 확인 | `OrderNotFoundException`, `UnauthorizedAccessException` |
+| Adapter | 기술 오류 | `DatabaseConnectionException` |
+
+### 8.3 예외 처리 위치
+- **Inbound Adapter**에서 `@RestControllerAdvice`로 통합 처리
+- Handler/Service에서 catch 하지 않고 상위로 전파
+- 표준 에러 응답으로 변환
+
+### 8.4 예외 처리 예시
+```java
+// Domain 예외 정의
+public class OrderNotFoundException extends DomainException {
+    public OrderNotFoundException(OrderId orderId) {
+        super("ORDER_NOT_FOUND", "주문을 찾을 수 없습니다: " + orderId.value());
+    }
+}
+
+// 글로벌 예외 핸들러
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(DomainException.class)
+    public ResponseEntity<ErrorResponse> handleDomainException(DomainException e) {
+        return ResponseEntity
+            .status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(new ErrorResponse(e.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(OrderNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(OrderNotFoundException e) {
+        return ResponseEntity
+            .status(HttpStatus.NOT_FOUND)
+            .body(new ErrorResponse(e.getCode(), e.getMessage()));
+    }
+}
+```
+
+---
+
+## 9. DB 컨벤션 (Phase 1: 단일 DB + schema 분리)
+
+### 9.1 schema 네이밍(권장)
 
 * `order.*`
 * `settlement.*`
@@ -214,14 +300,14 @@ alwaysApply: true
 * `messaging.*`
 * `geo.*`
 
-### 8.2 테이블/컬럼 네이밍
+### 9.2 테이블/컬럼 네이밍
 
 * 테이블: `snake_case` 복수형 권장(팀 정책에 맞춰 일관성 유지)
 * 컬럼: `snake_case`
 * 기본 키: `id`
 * 참조 키(soft-ref): `order_id`, `company_id`, `driver_id` 등
 
-### 8.3 Cross-service FK 금지
+### 9.3 Cross-service FK 금지
 
 * 다른 schema의 테이블에 FK로 묶지 않는다.
 * 서비스 간 참조는 `*_id` **soft-ref**로만 유지
@@ -229,27 +315,27 @@ alwaysApply: true
 
 ---
 
-## 9. 이벤트 컨벤션 (선택/확장)
+## 10. 이벤트 컨벤션 (선택/확장)
 
-### 9.1 이벤트 네이밍
+### 10.1 이벤트 네이밍
 
 * 이벤트명: `OrderCreated`, `OrderStatusChanged`, `SettlementBundleConfirmed`
 * 버전: `v1`, `v2` (contracts에서 관리)
 
-### 9.2 토픽 네이밍(권장)
+### 10.2 토픽 네이밍(권장)
 
 * `{service}.{entity}.{event}.v{n}`
 
   * 예: `order.order.created.v1`
 
-### 9.3 이벤트 스키마 위치
+### 10.3 이벤트 스키마 위치
 
 * `shared/contracts/events/...` 아래에서 버전 관리
 * 이벤트 payload는 DTO로 정의하고 backward compatibility를 우선한다.
 
 ---
 
-## 10. 로깅/트레이싱/관측성
+## 11. 로깅/트레이싱/관측성
 
 * 모든 요청은 `traceId`(또는 correlation-id)를 전파한다.
 * 로그는 식별자를 반드시 포함한다:
@@ -265,7 +351,7 @@ alwaysApply: true
 
 ---
 
-## 11. 테스트 컨벤션
+## 12. 테스트 컨벤션
 
 * Domain 테스트: `OrderTest`, `OrderStatusTransitionDomainServiceTest`
 * Application 테스트: `CreateOrderCommandHandlerTest`
@@ -279,9 +365,9 @@ alwaysApply: true
 
 ---
 
-## 12. 커밋/브랜치/PR 컨벤션(요약)
+## 13. 커밋/브랜치/PR 컨벤션(요약)
 
-### 12.1 커밋 메시지
+### 13.1 커밋 메시지
 
 * `feat: ...`
 * `fix: ...`
@@ -290,14 +376,14 @@ alwaysApply: true
 * `test: ...`
 * `chore: ...`
 
-### 12.2 PR
+### 13.2 PR
 
 * PR은 “문제 → 변경 → 영향 → 테스트” 순으로 작성
 * 서비스 경계를 넘는 변경(contracts/shared)은 영향 서비스 명시
 
 ---
 
-## 13. WebFlux + MVC 하이브리드 컨벤션(권장 운영)
+## 14. WebFlux + MVC 하이브리드 컨벤션(권장 운영)
 
 * Command(Write): MVC Controller + JPA (Blocking)
 * Query(Read): WebFlux + R2DBC(또는 캐시)
@@ -305,7 +391,7 @@ alwaysApply: true
 
 ---
 
-## 14. 체크리스트 (변경 전 자가점검)
+## 15. 체크리스트 (변경 전 자가점검)
 
 * [ ] `order` 용어 사용했는가? (`cargo` 금지)
 * [ ] 이 변경은 어느 서비스 소유 데이터인가?

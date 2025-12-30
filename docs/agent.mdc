@@ -38,6 +38,44 @@ AI는 작업을 시작하기 전에 반드시 아래 “작업 선언문”을 �
 
 > 선언문이 없으면 작업을 진행하지 않는다.
 
+### 1.2 작업 선언문 예시
+
+#### Command 예시
+```
+- 대상 서비스: `order-service`
+- 계층: `application`, `adapter(outbound/jpa)`, `adapter(inbound/rest)`
+- 작업 유형: `command(write)`
+- 데이터 소유권: `order.*`
+- 변경 범위:
+  - `CreateOrderCommand.java` (신규)
+  - `CreateOrderCommandHandler.java` (신규)
+  - `OrderWritePort.java` (수정)
+  - `OrderJpaAdapter.java` (수정)
+  - `OrderCommandController.java` (수정)
+- 완료 기준(DoD):
+  - `CreateOrderCommandHandlerTest` 통과
+  - 빌드 성공
+  - API 호출 시 주문 생성 확인
+```
+
+#### Query 예시
+```
+- 대상 서비스: `order-service`
+- 계층: `application`, `adapter(outbound/r2dbc)`, `adapter(inbound/rest)`
+- 작업 유형: `query(read)`
+- 데이터 소유권: `order.*` (읽기 전용)
+- 변경 범위:
+  - `GetOrderQuery.java` (신규)
+  - `GetOrderQueryHandler.java` (신규)
+  - `OrderReadPort.java` (신규)
+  - `OrderR2dbcAdapter.java` (신규)
+  - `OrderQueryController.java` (신규)
+- 완료 기준(DoD):
+  - `GetOrderQueryHandlerTest` 통과
+  - 빌드 성공
+  - API 호출 시 주문 조회 확인
+```
+
 ---
 
 ## 2. 작업 단위(권장) — Vertical Slice
@@ -68,6 +106,59 @@ AI는 큰 기능을 한 번에 구현하지 않고, 아래 단위로 나눈다.
 2) Outbound Adapter: R2DBC 또는 JPA Read 구현
 3) Inbound Adapter: WebFlux Handler 또는 Query Controller
 4) 테스트: Application(핵심) 우선
+
+예)
+- `GetOrderQuery` + `GetOrderQueryHandler` + `OrderReadPort` + `OrderR2dbcAdapter` + 테스트
+- `ListOrdersQuery` + `ListOrdersQueryHandler` + `OrderReadPort` (재사용) + 테스트
+
+#### 3.2.1 Query 구현 상세 예시
+```java
+// 1) Query 정의
+public record GetOrderQuery(OrderId orderId) {}
+
+// 2) ReadPort 정의
+public interface OrderReadPort {
+    Optional<OrderReadModel> findById(OrderId id);
+}
+
+// 3) QueryHandler 구현
+@Service
+@RequiredArgsConstructor
+public class GetOrderQueryHandler {
+    private final OrderReadPort orderReadPort;
+
+    public OrderResponse handle(GetOrderQuery query) {
+        return orderReadPort.findById(query.orderId())
+            .map(OrderResponse::from)
+            .orElseThrow(() -> new OrderNotFoundException(query.orderId()));
+    }
+}
+
+// 4) Outbound Adapter 구현
+@Repository
+@RequiredArgsConstructor
+public class OrderR2dbcAdapter implements OrderReadPort {
+    private final OrderR2dbcRepository repository;
+
+    @Override
+    public Optional<OrderReadModel> findById(OrderId id) {
+        return repository.findById(id.value())
+            .map(this::toReadModel);
+    }
+}
+
+// 5) Inbound Adapter (Controller)
+@RestController
+@RequiredArgsConstructor
+public class OrderQueryController {
+    private final GetOrderQueryHandler handler;
+
+    @GetMapping("/api/orders/{orderId}")
+    public OrderResponse getOrder(@PathVariable String orderId) {
+        return handler.handle(new GetOrderQuery(OrderId.of(orderId)));
+    }
+}
+```
 
 ---
 

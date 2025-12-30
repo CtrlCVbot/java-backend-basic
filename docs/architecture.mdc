@@ -16,10 +16,11 @@ alwaysApply: true
 - 아키텍처 구현 방식은 **Hexagonal + Clean Architecture + CQRS(Lite)** 를 기본으로 한다.
 
 > 규칙 충돌 시 우선순위:
-> 1) `.cursor/rules.mdc`  
-> 2) `docs/agent.mdc`  
-> 3) `docs/conventions.mdc`  
-> 4) `docs/architecture.md`
+> 1) `.cursor/rules/rules.mdc` (헌법)
+> 2) `docs/agent.mdc` (AI 작업 프로토콜)
+> 3) `docs/conventions.mdc` (표준/표현)
+> 4) `docs/architecture.mdc` (배경/방향)
+> 5) `docs/tech-stack.mdc` (기술 스택/도입 순서)
 
 ---
 
@@ -41,23 +42,13 @@ alwaysApply: true
 
 ## 3. 설계 원칙(Non-Negotiables)
 
-### 3.1 도메인 용어 고정
-- 모든 코드/패키지/DTO/테이블에서 **`order`** 용어를 사용한다.
-- `cargo` 용어/패키지는 신규로 만들지 않는다.
+> 상세 규칙은 `.cursor/rules/rules.mdc` 참조
 
-### 3.2 계층 분리(도메인 기술 독립)
-- Domain: JDK-only (Spring/JPA/Reactive/Kafka/Redis/Lombok 금지)
-- Application: UseCase 중심, Command/Query 분리
-- Adapter: 기술 구현만 (Controller/DB/Kafka/Redis/External)
-- Config: 조립(wiring)
-
-### 3.3 서비스 데이터 소유권(Owner)
-- 각 서비스는 자기 데이터의 **소유권**을 가진다.
-- 서비스 경계를 넘는:
-  - DB 조인 금지
-  - 직접 업데이트 금지
-  - cross-service FK 금지(신규 금지, 기존은 단계적 제거)
-- 서비스 간 참조는 **soft-ref(id만)** 로 한다.
+핵심 원칙 요약:
+- **도메인 용어**: `order` 고정, `cargo` 금지
+- **계층 분리**: Domain은 JDK-only (기술 독립)
+- **데이터 소유권**: 각 서비스는 자기 schema만 접근, cross-service 조인/FK 금지
+- **참조 방식**: soft-ref(id만) 사용
 
 ---
 
@@ -115,10 +106,11 @@ java-backend-basic/
 │  ├─ agent.mdc
 │  └─ conventions.mdc
 └─ .cursor/
-   └─ rules.mdc
+   └─ rules/
+      └─ rules.mdc
 ```
 
-### 5.1 shared 모듈의 “허용 범위”
+### 5.1 shared 모듈의 "허용 범위"
 
 * `shared/contracts`: 이벤트/DTO 스키마(버전 관리)
 * `shared/errors`: 에러 코드/표준 응답
@@ -126,6 +118,64 @@ java-backend-basic/
 * `shared/core`: 원시 타입/공통 유틸(도메인 규칙 금지)
 
 > 금지: 특정 서비스의 도메인 규칙(비즈니스 로직)을 shared로 올리는 행위
+
+### 5.2 멀티 모듈 Gradle 설정 예시
+
+#### settings.gradle.kts
+```kotlin
+rootProject.name = "java-backend-basic"
+
+// Services
+include("services:order-service")
+include("services:settlement-service")
+include("services:master-service")
+include("services:iam-service")
+include("services:messaging-service")
+
+// Shared modules
+include("shared:contracts")
+include("shared:errors")
+include("shared:observability")
+include("shared:core")
+```
+
+#### build.gradle.kts (root)
+```kotlin
+plugins {
+    java
+    id("org.springframework.boot") version "3.2.0" apply false
+    id("io.spring.dependency-management") version "1.1.4" apply false
+}
+
+subprojects {
+    apply(plugin = "java")
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+    }
+
+    repositories {
+        mavenCentral()
+    }
+}
+```
+
+#### services/order-service/build.gradle.kts
+```kotlin
+plugins {
+    id("org.springframework.boot")
+    id("io.spring.dependency-management")
+}
+
+dependencies {
+    implementation(project(":shared:errors"))
+    implementation(project(":shared:observability"))
+
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
+    // ...
+}
+```
 
 ---
 
@@ -184,33 +234,24 @@ com.example.<service>/
 
 ## 8. 데이터 전략: Phase 1 → Phase 2 진화
 
-### 8.1 Phase 1: 단일 DB + schema 분리(권장 시작점)
+> 상세 규칙은 `.cursor/rules/rules.mdc` 섹션 5 참조
 
-물리 DB는 하나(Postgres/Supabase)라도, schema로 소유권을 강제한다.
+### 8.1 Phase 1: 단일 DB + schema 분리 (배경)
 
-* `order.*`
-* `settlement.*`
-* `master.*`
-* `iam.*`
-* `messaging.*`
-* `geo.*` (infra)
+물리 DB 분리는 운영 복잡도를 높인다.
+초기에는 schema 분리만으로 "소유권 경계"를 강제하면서, 조인 의존을 제거해 나간다.
 
-원칙:
+이렇게 하면:
+- 개발 속도 유지
+- 운영 단순화
+- Phase 2 전환 비용 최소화
 
-* 각 서비스는 **자기 schema만** 접근한다.
-* cross-service FK 신규 금지(기존은 단계적 제거)
-* 참조는 `*_id` soft-ref로만 유지한다.
+### 8.2 Phase 2: 서비스별 물리 DB 분리 (트리거)
 
-### 8.2 Phase 2: 서비스별 물리 DB 분리(필요 시)
-
-트래픽/조직/배포 충돌이 커지면 DB를 물리적으로 분리한다.
-
-* Order DB / Settlement DB / Master DB / IAM DB …
-
-Phase 1 원칙을 잘 지키면,
-
-* “조인 의존”이 없어서
-* 마이그레이션 난이도가 크게 낮아진다.
+아래 조건이 생기면 물리 분리 검토:
+- 서비스별 트래픽 차이가 10배 이상
+- 조직 분리로 독립 배포 필요
+- 장애 격리 요구사항 발생
 
 ---
 

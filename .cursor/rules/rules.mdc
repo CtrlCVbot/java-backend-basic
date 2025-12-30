@@ -13,8 +13,13 @@ AI(Cursor 포함)와 사람이 작성하는 모든 코드는 이 규칙을 반�
 
 ## 0. 최우선 원칙 (Non-Negotiables)
 
-1) **도메인 용어는 `order`를 사용한다.**  
+1) **도메인 용어는 `order`를 사용한다.**
    - `cargo` 용어/패키지/클래스/테이블 명칭은 신규로 만들지 않는다.
+   - **배경:**
+     - `cargo`는 "화물" 자체를 의미하고, `order`는 "화물 운송 요청/주문"을 의미한다.
+     - 이 레포의 핵심 도메인은 "주문(order)"이며, AI가 두 용어를 혼동하여
+       기존 `order` 관련 코드를 `cargo`로 잘못 대체하는 문제가 발생했다.
+     - 따라서 **모든 신규 코드에서 `cargo` 사용을 금지**하고, `order`로 통일한다.
 
 2) **Hexagonal + Clean + CQRS(Lite)를 기본 아키텍처로 고정한다.**
    - Domain은 기술 독립(JDK-only)
@@ -73,11 +78,25 @@ Domain에 들어갈 수 있는 것:
 - Entity/Aggregate, Value Object, Domain Service, Domain Event(순수 객체)
 
 ### 2.2 Application 규칙
-Application은 “업무 흐름”만 담당한다.
+Application은 "업무 흐름"만 담당한다.
 
 - Command / Query 책임을 섞지 않는다.
 - Port(인터페이스)를 먼저 정의하고 Adapter가 구현한다.
 - 트랜잭션 경계는 Application에서 잡는다(Write 기준).
+
+#### 2.2.1 트랜잭션 경계 상세
+- `@Transactional`은 **CommandHandler**에 선언한다.
+- QueryHandler는 원칙적으로 트랜잭션 불필요 (필요 시 `readOnly=true`).
+- 예시:
+  ```java
+  @Service
+  public class CreateOrderCommandHandler {
+      @Transactional  // 여기서 트랜잭션 시작
+      public OrderId handle(CreateOrderCommand command) {
+          // ...
+      }
+  }
+  ```
 
 ### 2.3 Adapter 규칙
 Adapter는 기술 구현만 한다.
@@ -96,6 +115,38 @@ Adapter에는 **비즈니스 규칙을 작성하지 않는다.**
 - 상태 변경(Create/Update/Cancel/Confirm 등)
 - 트랜잭션 무결성 우선
 - 기본은 **JPA 기반(Blocking)**
+
+#### 3.1.1 도메인 이벤트 발행 시점
+- 이벤트는 **Domain Entity/Aggregate 내부**에서 생성하고,
+  **CommandHandler 마지막**에서 발행(publish)한다.
+- 트랜잭션 커밋 후 발행이 필요하면 `@TransactionalEventListener(phase = AFTER_COMMIT)` 사용.
+- 예시:
+  ```java
+  // Domain (이벤트 생성만)
+  public class Order {
+      private List<DomainEvent> events = new ArrayList<>();
+
+      public void confirm() {
+          this.status = OrderStatus.CONFIRMED;
+          events.add(new OrderConfirmedEvent(this.id));
+      }
+
+      public List<DomainEvent> pullEvents() {
+          List<DomainEvent> pulled = new ArrayList<>(events);
+          events.clear();
+          return pulled;
+      }
+  }
+
+  // CommandHandler (이벤트 발행)
+  @Transactional
+  public void handle(ConfirmOrderCommand cmd) {
+      Order order = orderWritePort.findById(cmd.orderId());
+      order.confirm();
+      orderWritePort.save(order);
+      eventPublisher.publishAll(order.pullEvents()); // 발행
+  }
+  ```
 
 ### 3.2 Query (Read)
 - 조회 전용
